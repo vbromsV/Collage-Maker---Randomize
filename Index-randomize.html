@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple Collage Maker</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#ffffff">
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 10px; }
+    #controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    label#addImageBtn { position: relative; flex: 1 1 auto; padding: 10px; border:1px solid #ccc; border-radius:4px; background:#f0f0f0; text-align:center; cursor:pointer; }
+    label#addImageBtn input { position:absolute; top:0; left:0; width:100%; height:100%; opacity:0; }
+    #controls button, #controls select, #controls input[type=range] { padding:10px; border:1px solid #ccc; border-radius:4px; background:#fff; }
+    #controls button[disabled] { opacity:0.5; cursor:not-allowed; }
+    #canvasContainer { text-align:center; position:relative; }
+    canvas { border:1px solid #ccc; touch-action:none; display:block; max-width:100vw; max-height:calc(100vh - 150px); margin:0 auto; }
+    .lock-btn { position:absolute; top:8px; width:24px; height:24px; background:rgba(255,255,255,0.6); border:none; border-radius:4px; font-size:14px; cursor:pointer; opacity:0.5; transition:opacity 0.2s; }
+    .lock-btn:hover { opacity:1; }
+    .lock-btn.locked { background:rgba(0,120,215,0.8); color:white; }
+    #lock0 { left:8px; }
+    #lock1 { left:50%; transform:translateX(-50%); }
+    #lock2 { right:8px; }
+  </style>
+</head>
+<body>
+  <!-- Hidden inputs -->
+  <input type="file" id="singlePicker" accept="image/*" multiple style="display:none">
+  <input type="file" id="folderPicker0" webkitdirectory multiple style="display:none">
+  <input type="file" id="folderPicker1" webkitdirectory multiple style="display:none">
+  <input type="file" id="folderPicker2" webkitdirectory multiple style="display:none">
+  <input type="file" id="changeImg0" accept="image/*" style="display:none">
+  <input type="file" id="changeImg1" accept="image/*" style="display:none">
+  <input type="file" id="changeImg2" accept="image/*" style="display:none">
+
+  <div id="controls">
+    <label id="addImageBtn">Add Image (<span id="imageCount">0</span>/3)
+      <input type="file" id="fileSelector" accept="image/*" multiple>
+    </label>
+    <select id="orientation"><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select>
+    <select id="ratioSelect">
+      <option value="1:1">1:1</option>
+      <option value="16:9">16:9</option>
+      <option value="9:16">9:16</option>
+      <option value="4:5">4:5</option>
+      <option value="5:4">5:4</option>
+      <option value="4:3" selected>4:3</option>
+      <option value="3:4">3:4</option>
+      <option value="2:3">2:3</option>
+      <option value="3:2">3:2</option>
+      <option value="21:9">21:9</option>
+      <option value="free">Free</option>
+    </select>
+    <button id="applyFree" style="display:none;">Set Free Ratio</button>
+    <button id="loadFolder0" disabled>Load Folder 1</button>
+    <button id="loadFolder1" disabled>Load Folder 2</button>
+    <button id="loadFolder2" disabled>Load Folder 3</button>
+    <button id="change0" disabled>Change Img 1</button>
+    <button id="change1" disabled>Change Img 2</button>
+    <button id="change2" disabled>Change Img 3</button>
+    <button id="rand0">🎲 Rand 1</button>
+    <button id="rand1">🎲 Rand 2</button>
+    <button id="randAll">🎲 Rand All</button>
+    <button id="mirror">Mirror</button>
+    <button id="rotL">⟲</button>
+    <button id="rotR">⟳</button>
+    <input type="range" id="rotSlider" min="0" max="360" step="1" style="display:none;" />
+    <button id="quickSave">Quick Save</button>
+    <button id="saveAs">Save As…</button>
+  </div>
+  <div id="canvasContainer">
+    <canvas id="canvas"></canvas>
+    <button id="lock0" class="lock-btn" data-index="0">🔒</button>
+    <button id="lock1" class="lock-btn" data-index="1">🔒</button>
+    <button id="lock2" class="lock-btn" data-index="2">🔒</button>
+  </div>
+  <script>
+    // State
+    let selectedIdx = null, saveCount = 1, lastRw = 4, lastRh = 3;
+    let imagesData = [], fractions = [];
+    let dragIdx = null, panIdx = null, hoverIdx = null;
+    let startPos = {}, startOffset = {}, prev = 0, nxt = 0;
+    const HANDLE = 10, HL = 4;
+
+    // Refs
+    const fileSelector = document.getElementById('fileSelector');
+    const folderBtns = [document.getElementById('loadFolder0'), document.getElementById('loadFolder1'), document.getElementById('loadFolder2')];
+    const changeBtns = [document.getElementById('change0'), document.getElementById('change1'), document.getElementById('change2')];
+    const folderPickers = [document.getElementById('folderPicker0'), document.getElementById('folderPicker1'), document.getElementById('folderPicker2')];
+    const changePickers = [document.getElementById('changeImg0'), document.getElementById('changeImg1'), document.getElementById('changeImg2')];
+    const rand0 = document.getElementById('rand0'), rand1 = document.getElementById('rand1'), randAll = document.getElementById('randAll');
+    const ori = document.getElementById('orientation'), ratioSel = document.getElementById('ratioSelect'), applyFreeBtn = document.getElementById('applyFree');
+    const mirrorBtn = document.getElementById('mirror'), rotL = document.getElementById('rotL'), rotR = document.getElementById('rotR');
+    const rotSlider = document.getElementById('rotSlider'), quickSaveBtn = document.getElementById('quickSave'), saveAsBtn = document.getElementById('saveAs');
+    const imgCount = document.getElementById('imageCount');
+    const canvas = document.getElementById('canvas'), ctx = canvas.getContext('2d');
+    const lockBtns = [document.getElementById('lock0'), document.getElementById('lock1'), document.getElementById('lock2')];
+    const folderHandles = [[],[],[]], changeHandles = [null,null,null], locked = [false,false,false];
+
+    // Initialize
+    function init() {
+      fileSelector.onchange = loadFiles;
+      folderBtns.forEach((btn,i)=>btn.onclick=()=>pickFolder(i));
+      changeBtns.forEach((btn,i)=>btn.onclick=()=>replaceImage(i));
+      rand0.onclick=()=>randomizeIndex(0);
+      rand1.onclick=()=>randomizeIndex(1);
+      randAll.onclick=()=>imagesData.forEach((_,i)=>randomizeIndex(i));
+      lockBtns.forEach((btn,i)=>btn.onclick=()=>{ locked[i]=!locked[i]; btn.classList.toggle('locked',locked[i]); });
+      ratioSel.onchange=()=>{ if(ratioSel.value==='free') applyFreeBtn.style.display='inline'; else { applyFreeBtn.style.display='none'; [lastRw,lastRh]=ratioSel.value.split(':').map(Number); applyRatio(lastRw,lastRh); }};
+      applyFreeBtn.onclick=()=>{ const w=+prompt('Width',lastRw),h=+prompt('Height',lastRh); if(w>0&&h>0){lastRw=w;lastRh=h;applyRatio(w,h);} };
+      mirrorBtn.onclick=()=>{ if(selectedIdx!==null){ imagesData[selectedIdx].flip=!imagesData[selectedIdx].flip; drawAll(); }};
+      rotL.onclick=()=>{ if(selectedIdx!==null){ imagesData[selectedIdx].angle-=Math.PI/180; drawAll(); showSlider(); }};
+      rotR.onclick=()=>{ if(selectedIdx!==null){ imagesData[selectedIdx].angle+=Math.PI/180; drawAll(); showSlider(); }};
+      rotSlider.oninput=()=>{ if(selectedIdx!==null){ imagesData[selectedIdx].angle=rotSlider.value*Math.PI/180; drawAll(); }};
+      quickSaveBtn.onclick=()=>{ canvas.toBlob(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`collage${saveCount++}.jpg`;a.click();},'image/jpeg'); };
+      saveAsBtn.onclick=async()=>{ if(window.showSaveFilePicker){ const h=await showSaveFilePicker({suggestedName:`collage${saveCount}.jpg`,types:[{description:'Image',accept:{'image/png':['.png'],'image/jpeg':['.jpg']}}]}).catch(()=>null); if(h){ const w=await h.createWritable(),b=await new Promise(r=>canvas.toBlob(r,'image/jpeg'));await w.write(b);await w.close();saveCount++; } }};
+      canvas.onpointerdown=e=>{e.preventDefault();pointerDown(e);};
+      canvas.onpointermove=e=>{e.preventDefault();pointerMove(e);};
+      canvas.onpointerup=e=>{e.preventDefault();pointerUp(e);};
+      canvas.onwheel=e=>{e.preventDefault();pointerWheel(e);};
+      window.onresize=()=>applyRatio(lastRw,lastRh);
+      navigator.serviceWorker&&navigator.serviceWorker.register('/service-worker.js');
+      applyRatio(lastRw,lastRh);
+    }
+
+    function loadFiles(e) {
+      const files=Array.from(e.target.files).slice(0,3-imagesData.length);
+      files.forEach(file=>{ const img=new Image(); img.onload=()=>{ imagesData.push({img,base:1,scale:1,x:0,y:0,angle:0,flip:false}); fractions=Array(imagesData.length).fill(1/imagesData.length); imgCount.textContent=imagesData.length; folderBtns[imagesData.length-1].disabled=false; changeBtns[imagesData.length-1].disabled=false; applyRatio(lastRw,lastRh); }; img.src=URL.createObjectURL(file); });
+      fileSelector.value='';
+    }
+    async function pickFolder(i){ if(window.showDirectoryPicker){ const dir=await showDirectoryPicker().catch(()=>null); if(dir){ folderHandles[i]=[]; for await(const [name,hdl] of dir.entries()) if(name.match(/\.(jpe?g|png|webp)$/i)) folderHandles[i].push(hdl); alert(`Loaded ${folderHandles[i].length} images for pane ${i+1}`); } } else folderPickers[i].click(); }
+    function replaceImage(i){ if(window.showOpenFilePicker){ showOpenFilePicker({multiple:false,types:[{description:'Images',accept:{'image/*':['.png','.jpg','.jpeg','.webp']}}],startIn:changeHandles[i]||'documents'}).then(handles=>{ if(handles&&handles.length){ changeHandles[i]=handles[0]; handles[0].getFile().then(f=>loadReplacement(i,f)); }}).catch(()=>{}); } else changePickers[i].click(); }
+    function loadReplacement(i,file){ const img=new Image(); img.onload=()=>{ imagesData[i]={img,base:1,scale:1,x:0,y:0,angle:0,flip:false}; fractions=Array(imagesData.length).fill(1/imagesData.length); applyRatio(lastRw,lastRh); }; img.src=URL.createObjectURL(file); }
+    async function randomizeIndex(i){ if(!locked[i]&&folderHandles[i].length){ const ent=folderHandles[i][Math.floor(Math.random()*folderHandles[i].length)]; const file=ent instanceof File?ent:await ent.getFile(); loadReplacement(i,file); }}
+
+    function pointerDown(e){ const [mx,my]=getPos(e),tot=ori.value==='horizontal'?canvas.width:canvas.height; hoverIdx=null; let acc=0; for(let i=1;i<fractions.length;i++){ acc+=fractions[i-1]*tot; if(Math.abs((ori.value==='horizontal'?mx:my)-acc)<HANDLE){ dragIdx=i; prev=fractions[i-1]; nxt=fractions[i]; return; }} const idx=getPane(mx,my); if(idx!==null){ selectedIdx=idx; panIdx=idx; startPos={x:mx,y:my}; startOffset={x:imagesData[idx].x,y:imagesData[idx].y}; drawAll(); }}
+    function pointerMove(e){ const [mx,my]=getPos(e),tot=ori.value==='horizontal'?canvas.width:canvas.height; if(dragIdx!==null){ const start=fractions.slice(0,dragIdx-1).reduce((a,b)=>a+b,0)*tot; let d=((ori.value==='horizontal'?mx:my)-start)/tot; d=Math.max(0.05,Math.min(prev+nxt-0.05,d)); fractions[dragIdx-1]=d; fractions[dragIdx]=prev+nxt-d; drawAll(); return;} if(panIdx!==null){ const o=imagesData[panIdx]; o.x=startOffset.x+(mx-startPos.x); o.y=startOffset.y+(my-startPos.y); drawAll(); return;} let acc=0; hoverIdx=null; for(let i=1;i<fractions.length;i++){ acc+=fractions[i-1]*tot; if(Math.abs((ori.value==='horizontal'?mx:my)-acc)<HANDLE){ hoverIdx=i; break; }} canvas.style.cursor=hoverIdx!==null?(ori.value==='horizontal'?'col-resize':'row-resize'):'auto'; drawAll(); }
+    function pointerUp(){ dragIdx=panIdx=null; }
+    function pointerWheel(e){ const [mx,my]=getPos(e),idx=getPane(mx,my); if(idx!==null){ const o=imagesData[idx]; o.scale*=e.deltaY<0?1.1:0.9; o.scale=Math.max(o.base*0.5,Math.min(o.base*5,o.scale)); drawAll(); }}
+
+    // Utilities
+    function applyRatio(rw,rh){ const ctrlH=document.getElementById('controls').offsetHeight+20; let maxW=window.innerWidth*0.95,maxH=window.innerHeight-ctrlH-20; let h=maxW*(rh/rw), w=maxW; if(h>maxH){h=maxH; w=h*(rw/rh);} canvas.width=w; canvas.height=h; canvas.style.width=w+'px'; canvas.style.height=h+'px'; imagesData.forEach(o=>{ const b=(ori.value==='horizontal'?h/o.img.height:w/o.img.width); o.base=b; o.scale=b; o.x=0; o.y=0; }); drawAll(); }
+    function drawAll(){ ctx.clearRect(0,0,canvas.width,canvas.height); let off=0; imagesData.forEach((o,i)=>{ const W=canvas.width,H=canvas.height; const w=ori.value==='horizontal'?fractions[i]*W:W; const h=ori.value==='horizontal'?H:fractions[i]*H; ctx.save(); ctx.beginPath(); if(ori.value==='horizontal') ctx.rect(off,0,w,H); else ctx.rect(0,off,W,h); ctx.clip(); const iw=o.img.width*o.scale, ih=o.img.height*o.scale; const cx=ori.value==='horizontal'?off+w/2:W/2, cy=ori.value==='horizontal'?H/2:off+h/2; ctx.translate(cx+o.x,cy+o.y); if(o.flip) ctx.scale(-1,1); ctx.rotate(o.angle); ctx.drawImage(o.img,-iw/2,-ih/2,iw,ih); ctx.restore(); off+=ori.value==='horizontal'?w:h; }); if(hoverIdx!==null&&!dragIdx){ const tot=ori.value==='horizontal'?canvas.width:canvas.height; const pos=fractions.slice(0,hoverIdx).reduce((a,b)=>a+b,0)*tot; ctx.fillStyle='rgba(0,120,215,0.5)'; if(ori.value==='horizontal') ctx.fillRect(pos-HL/2,0,HL,canvas.height); else ctx.fillRect(0,pos-HL/2,canvas.width,HL); }}
+    function getPane(x,y){ let acc=0,tot=ori.value==='horizontal'?canvas.width:canvas.height; for(let i=0;i<imagesData.length;i++){ const len=fractions[i]*tot; if((ori.value==='horizontal'?x>=acc&&x<=acc+len:y>=acc&&y<=acc+len)) return i; acc+=len;} return null; }
+    function getPos(e){ const r=canvas.getBoundingClientRect(); return [(e.clientX-r.left)*(canvas.width/r.width),(e.clientY-r.top)*(canvas.height/r.height)]; }
+    function showSlider(){ if(selectedIdx===null)return; rotSlider.style.display='block'; rotSlider.value=((imagesData[selectedIdx].angle*180/Math.PI)%360+360)%360; }
+
+    init();
+  </script>
+</body>
+</html>
